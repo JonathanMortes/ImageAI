@@ -80,7 +80,7 @@ class ObjectDetection:
         self.__yolo_boxes, self.__yolo_scores, self.__yolo_classes = "", "", ""
         self.__tiny_yolo_anchors = [[81, 82, 135, 169, 344, 319], [10, 14, 23, 27, 37, 58]]
         self.__box_color = (112, 19, 24)
-        
+
 
     def setModelTypeAsRetinaNet(self):
         """
@@ -193,7 +193,7 @@ class ObjectDetection:
                                  len(self.numbers_to_names.keys()))
 
                 model.load_weights(self.modelPath)
-               
+
                 self.__model_collection.append(model)
                 self.__modelLoaded = True
 
@@ -304,7 +304,7 @@ class ObjectDetection:
                             self.__yolo_model_image_size,
                             (image_w, image_h),
                             self.numbers_to_names)
-                            
+
                 elif (self.__modelType == "retinanet"):
                     detected_copy = preprocess_image(detected_copy)
                     detected_copy, scale = resize_image(detected_copy)
@@ -312,7 +312,7 @@ class ObjectDetection:
                     model = self.__model_collection[0]
                     boxes, scores, labels = model.predict_on_batch(np.expand_dims(detected_copy, axis=0))
 
-                    
+
                     boxes /= scale
 
                     for box, score, label in zip(boxes[0], scores[0], labels[0]):
@@ -338,7 +338,7 @@ class ObjectDetection:
                     if (custom_objects is not None):
                         if (custom_objects[label] != "valid"):
                             continue
-                    
+
                     detections.append(detection)
 
                     if display_object_name == False:
@@ -347,15 +347,15 @@ class ObjectDetection:
                     if display_percentage_probability == False:
                         percentage_probability = None
 
-                    
-                    image_copy = draw_boxes(image_copy, 
+
+                    image_copy = draw_boxes(image_copy,
                                     box_points,
                                     display_box,
-                                    label, 
-                                    percentage_probability, 
+                                    label,
+                                    percentage_probability,
                                     self.__box_color)
-                    
-                    
+
+
 
                     if (extract_detected_objects == True):
                         splitted_copy = image_copy.copy()[box_points[1]:box_points[3],
@@ -371,7 +371,7 @@ class ObjectDetection:
                         elif (output_type == "array"):
                             detected_objects_image_array.append(splitted_copy)
 
-                
+
                 if (output_type == "file"):
                     cv2.imwrite(output_image_path, image_copy)
 
@@ -465,22 +465,22 @@ class ObjectDetection:
                                extract_detected_objects=False, minimum_percentage_probability=50,
                                display_percentage_probability=True, display_object_name=True,
                                display_box=True, thread_safe=False, custom_objects=None):
-        
+
         warnings.warn("'detectCustomObjectsFromImage()' function has been deprecated and will be removed in future versions of ImageAI. \n Kindly use 'detectObjectsFromImage()' ",
          DeprecationWarning, stacklevel=2)
-        
+
         return self.detectObjectsFromImage(input_image=input_image,
-                                            output_image_path=output_image_path, 
-                                            input_type=input_type, 
+                                            output_image_path=output_image_path,
+                                            input_type=input_type,
                                             output_type=output_type,
-                                            extract_detected_objects=extract_detected_objects, 
+                                            extract_detected_objects=extract_detected_objects,
                                             minimum_percentage_probability=minimum_percentage_probability,
-                                            display_percentage_probability=display_percentage_probability, 
+                                            display_percentage_probability=display_percentage_probability,
                                             display_object_name=display_object_name,
-                                            display_box=display_box, 
-                                            thread_safe=thread_safe, 
+                                            display_box=display_box,
+                                            thread_safe=thread_safe,
                                             custom_objects=custom_objects)
-        
+
 
 class VideoObjectDetection:
     """
@@ -606,7 +606,7 @@ class VideoObjectDetection:
                                frame_detection_interval=1, minimum_percentage_probability=50, log_progress=False,
                                display_percentage_probability=True, display_object_name=True, display_box=True, save_detected_video=True,
                                per_frame_function=None, per_second_function=None, per_minute_function=None,
-                               video_complete_function=None, return_detected_frame=False, detection_timeout = None, 
+                               video_complete_function=None, return_detected_frame=False, detection_timeout = None,
                                thread_safe=False, custom_objects=None):
 
         """
@@ -737,7 +737,7 @@ class VideoObjectDetection:
                         counting += 1
 
                         if (log_progress == True):
-                            print("Processing Frame : ", str(counting))
+                            print("Processing Frames maldita sea : ", str(counting))
 
                         detected_copy = frame.copy()
 
@@ -767,7 +767,7 @@ class VideoObjectDetection:
 
                         output_frames_count_dict[counting] = output_objects_count
 
-                        
+
                         if (save_detected_video == True):
                             output_video.write(detected_copy)
 
@@ -959,26 +959,26 @@ class VideoObjectDetection:
                                frame_detection_interval=1, minimum_percentage_probability=50, log_progress=False,
                                display_percentage_probability=True, display_object_name=True, display_box=True, save_detected_video=True,
                                per_frame_function=None, per_second_function=None, per_minute_function=None,
-                               video_complete_function=None, return_detected_frame=False, detection_timeout = None, 
+                               video_complete_function=None, return_detected_frame=False, detection_timeout = None,
                                thread_safe=False, custom_objects=None):
 
 
         return self.detectObjectsFromVideo(input_file_path=input_file_path,
                                             camera_input=camera_input,
-                                            output_file_path=output_file_path, 
+                                            output_file_path=output_file_path,
                                             frames_per_second=frames_per_second,
-                                            frame_detection_interval=frame_detection_interval, 
-                                            minimum_percentage_probability=minimum_percentage_probability, 
+                                            frame_detection_interval=frame_detection_interval,
+                                            minimum_percentage_probability=minimum_percentage_probability,
                                             log_progress=log_progress,
-                                            display_percentage_probability=display_percentage_probability, 
-                                            display_object_name=display_object_name, 
-                                            display_box=display_box, 
+                                            display_percentage_probability=display_percentage_probability,
+                                            display_object_name=display_object_name,
+                                            display_box=display_box,
                                             save_detected_video=save_detected_video,
-                                            per_frame_function=per_frame_function, 
-                                            per_second_function=per_second_function, 
+                                            per_frame_function=per_frame_function,
+                                            per_second_function=per_second_function,
                                             per_minute_function=per_minute_function,
-                                            video_complete_function=video_complete_function, 
-                                            return_detected_frame=return_detected_frame, 
-                                            detection_timeout = detection_timeout, 
-                                            thread_safe=thread_safe, 
+                                            video_complete_function=video_complete_function,
+                                            return_detected_frame=return_detected_frame,
+                                            detection_timeout = detection_timeout,
+                                            thread_safe=thread_safe,
                                             custom_objects=custom_objects)
