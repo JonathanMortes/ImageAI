@@ -1,13 +1,13 @@
-from imageai.Classification import ImageClassification
+from imageai.Prediction import ImagePrediction
 import os
 
 execution_path = os.getcwd()
 
-prediction = ImageClassification()
-prediction.setModelTypeAsResNet50()
-prediction.setModelPath(os.path.join(execution_path, "resnet50_imagenet_tf.2.0.h5")) # Download the model via this link https://github.com/OlafenwaMoses/ImageAI/releases/tag/1.0
+prediction = ImagePrediction()
+prediction.setModelTypeAsResNet()
+prediction.setModelPath(os.path.join(execution_path, "resnet50_weights_tf_dim_ordering_tf_kernels.h5")) # Download the model via this link https://github.com/OlafenwaMoses/ImageAI/releases/tag/1.0
 prediction.loadModel()
 
-predictions, probabilities = prediction.classifyImage(os.path.join(execution_path, "1.jpg"), result_count=10)
+predictions, probabilities = prediction.predictImage(os.path.join(execution_path, "1.jpg"), result_count=10)
 for eachPrediction, eachProbability in zip(predictions, probabilities):
     print(eachPrediction , " : " , eachProbability)
