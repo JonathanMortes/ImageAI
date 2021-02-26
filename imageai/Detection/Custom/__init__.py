@@ -1,25 +1,26 @@
 import os
-import re
 import numpy as np
 import json
 from imageai.Detection.Custom.voc import parse_voc_annotation
-from imageai.Detection.YOLO.yolov3 import yolov3_main, yolov3_train, dummy_loss
+from imageai.Detection.Custom.yolo import create_yolov3_model, dummy_loss
+from imageai.Detection.YOLOv3.models import yolo_main
 from imageai.Detection.Custom.generator import BatchGenerator
 from imageai.Detection.Custom.utils.utils import normalize, evaluate, makedirs
-from tensorflow.keras.callbacks import ReduceLROnPlateau
-from tensorflow.keras.optimizers import Adam
-from imageai.Detection.Custom.callbacks import CustomModelCheckpoint
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from keras.optimizers import Adam
+from imageai.Detection.Custom.callbacks import CustomModelCheckpoint, CustomTensorBoard
 from imageai.Detection.Custom.utils.multi_gpu_model import multi_gpu_model
 from imageai.Detection.Custom.gen_anchors import generateAnchors
 import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras import Input
-from tensorflow.keras.callbacks import TensorBoard
-import tensorflow.keras.backend as K
+import keras
+from keras.preprocessing.image import load_img, img_to_array
+from keras.models import load_model, Input
+from PIL import Image
+import matplotlib.image as pltimage
 import cv2
 
-tf.config.run_functions_eagerly(True)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 
 
 class DetectionModelTrainer:
@@ -30,12 +31,14 @@ class DetectionModelTrainer:
     """
 
     def __init__(self):
+
         self.__model_type = ""
         self.__training_mode = True
 
         self.__model_min_input_size = 288
         self.__model_max_input_size = 448
         self.__model_anchors = []
+        self.__reversed_model_anchors = []
         self.__inference_anchors = []
         self.__json_directory = ""
         self.__model_labels = []
@@ -51,8 +54,8 @@ class DetectionModelTrainer:
         self.__train_epochs = 100
         self.__train_warmup_epochs = 3
         self.__train_ignore_treshold = 0.5
-        self.__train_gpus = "0"
-        self.__train_grid_scales = [1, 1, 1]
+        self.__train_gpus = "0,1"
+        self.__train_grid_scales = [1,1,1]
         self.__train_obj_scale = 5
         self.__train_noobj_scale = 1
         self.__train_xywh_scale = 1
@@ -60,12 +63,14 @@ class DetectionModelTrainer:
         self.__model_directory = ""
         self.__train_weights_name = ""
         self.__train_debug = True
-        self.__logs_directory = ""
 
         self.__validation_images_folder = ""
         self.__validation_annotations_folder = ""
         self.__validation_cache_file = ""
         self.__validation_times = 1
+
+
+
 
     def setModelTypeAsYOLOv3(self):
         """
@@ -111,45 +116,29 @@ class DetectionModelTrainer:
         :return:
         """
 
-        self.__train_images_folder = os.path.join(data_directory, "train", "images")
-        self.__train_annotations_folder = os.path.join(data_directory, "train", "annotations")
-        self.__validation_images_folder = os.path.join(data_directory, "validation", "images")
-        self.__validation_annotations_folder = os.path.join(data_directory, "validation", "annotations")
+        self.__train_images_folder = os.path.join(data_directory, "train/images/")
+        self.__train_annotations_folder = os.path.join(data_directory, "train/annotations/")
+        self.__validation_images_folder = os.path.join(data_directory, "validation/images/")
+        self.__validation_annotations_folder = os.path.join(data_directory, "validation/annotations/")
 
-        os.makedirs(os.path.join(data_directory, "cache"), exist_ok=True)
+        if os.path.exists(os.path.join(data_directory, "cache")) == False:
+            os.makedirs(os.path.join(data_directory, "cache"))
         self.__train_cache_file = os.path.join(data_directory, "cache", "detection_train_data.pkl")
         self.__validation_cache_file = os.path.join(data_directory, "cache", "detection_test_data.pkl")
 
-        os.makedirs(os.path.join(data_directory, "models"), exist_ok=True)
+        if os.path.exists(os.path.join(data_directory, "models")) == False:
+            os.makedirs(os.path.join(data_directory, "models"))
 
-        os.makedirs(os.path.join(data_directory, "json"), exist_ok=True)
-
-        os.makedirs(os.path.join(data_directory, "logs"), exist_ok=True)
+        if os.path.exists(os.path.join(data_directory, "json")) == False:
+            os.makedirs(os.path.join(data_directory, "json"))
 
         self.__model_directory = os.path.join(data_directory, "models")
         self.__train_weights_name = os.path.join(self.__model_directory, "detection_model-")
         self.__json_directory = os.path.join(data_directory, "json")
-        self.__logs_directory = os.path.join(data_directory, "logs")
 
-    def setGpuUsage(self, train_gpus):
-        """
-        'setGpuUsage' function allows you to set the GPUs to be used while training
-        train_gpu can be:
-        - an integer, indicating the number of GPUs to use
-        - a list of integers, indicating the id of the GPUs to be used
-        - a string, indicating the it og the id of the GPUs to be used, separated by commas
-        :param train_gpus: gpus where to run
-        :return:
-        """
-        # train_gpus, could be a string separated by comma, or a list of int or the number of GPUs to be used
-        if type(train_gpus) == str:
-            train_gpus = train_gpus.split(',')
-        if type(train_gpus) == int:
-            train_gpus = range(train_gpus)
-        # let it as a string separated by commas
-        self.__train_gpus = ','.join([str(gpu) for gpu in train_gpus])
 
-    def setTrainConfig(self,  object_names_array, batch_size=4, num_experiments=100, train_from_pretrained_model=""):
+
+    def setTrainConfig(self,  object_names_array, batch_size= 4, num_experiments=100, train_from_pretrained_model=""):
 
         """
 
@@ -167,16 +156,10 @@ class DetectionModelTrainer:
         :return:
         """
 
-        # Remove cache files
-        if os.path.isfile(self.__train_cache_file) == True:
-            os.remove(self.__train_cache_file)
 
-        if os.path.isfile(self.__validation_cache_file) == True:
-            os.remove(self.__validation_cache_file)
-
-        self.__model_anchors, self.__inference_anchors = generateAnchors(self.__train_annotations_folder,
-                                                                         self.__train_images_folder,
-                                                                         self.__train_cache_file, self.__model_labels)
+        self.__model_anchors, self.__reversed_model_anchors = generateAnchors(self.__train_annotations_folder,
+                                                                          self.__train_images_folder,
+                                                                          self.__train_cache_file, self.__model_labels)
 
         self.__model_labels = sorted(object_names_array)
         self.__num_objects = len(object_names_array)
@@ -185,13 +168,18 @@ class DetectionModelTrainer:
         self.__train_epochs = num_experiments
         self.__pre_trained_model = train_from_pretrained_model
 
-        json_data = dict()
+        self.__inference_anchors.append(self.__reversed_model_anchors[0:6])
+        self.__inference_anchors.append(self.__reversed_model_anchors[6:12])
+        self.__inference_anchors.append(self.__reversed_model_anchors[12:18])
+
+        json_data = {}
         json_data["labels"] = self.__model_labels
         json_data["anchors"] = self.__inference_anchors
 
         with open(os.path.join(self.__json_directory, "detection_config.json"), "w+") as json_file:
             json.dump(json_data, json_file, indent=4, separators=(",", " : "),
                       ensure_ascii=True)
+            json_file.close()
 
         print("Detection configuration saved in ", os.path.join(self.__json_directory, "detection_config.json"))
 
@@ -218,11 +206,9 @@ class DetectionModelTrainer:
             self.__model_labels
 
         )
-        if self.__training_mode:
+        if(self.__training_mode):
             print('Training on: \t' + str(labels) + '')
             print("Training with Batch Size: ", self.__train_batch_size)
-            print("Number of Training Samples: ", len(train_ints))
-            print("Number of Validation Samples: ", len(valid_ints))
             print("Number of Experiments: ", self.__train_epochs)
 
         ###############################
@@ -264,24 +250,7 @@ class DetectionModelTrainer:
         warmup_batches = self.__train_warmup_epochs * (self.__train_times * len(train_generator))
 
         os.environ['CUDA_VISIBLE_DEVICES'] = self.__train_gpus
-        multi_gpu = [int(gpu) for gpu in self.__train_gpus.split(',')]
-
-        """train_model, infer_model = self._create_model(
-            nb_class=len(labels),
-            anchors=self.__model_anchors,
-            max_box_per_image=max_box_per_image,
-            max_grid=[self.__model_max_input_size, self.__model_max_input_size],
-            batch_size=self.__train_batch_size,
-            warmup_batches=warmup_batches,
-            ignore_thresh=self.__train_ignore_treshold,
-            multi_gpu=multi_gpu,
-            lr=self.__train_learning_rate,
-            grid_scales=self.__train_grid_scales,
-            obj_scale=self.__train_obj_scale,
-            noobj_scale=self.__train_noobj_scale,
-            xywh_scale=self.__train_xywh_scale,
-            class_scale=self.__train_class_scale,
-        )"""
+        multi_gpu = len(self.__train_gpus.split(','))
 
         train_model, infer_model = self._create_model(
             nb_class=len(labels),
@@ -305,19 +274,22 @@ class DetectionModelTrainer:
         ###############################
         callbacks = self._create_callbacks(self.__train_weights_name, infer_model)
 
+
         train_model.fit_generator(
             generator=train_generator,
             steps_per_epoch=len(train_generator) * self.__train_times,
             validation_data=valid_generator,
             validation_steps=len(valid_generator) * self.__train_times,
             epochs=self.__train_epochs + self.__train_warmup_epochs,
-            verbose=1,
+            verbose=2,
             callbacks=callbacks,
             workers=4,
             max_queue_size=8
         )
 
+
     def evaluateModel(self, model_path, json_path, batch_size=4, iou_threshold=0.5, object_threshold=0.2, nms_threshold=0.45):
+
         """
 
         'evaluateModel()' is used to obtain the mAP metrics for your model(s). It accepts the following values:
@@ -334,25 +306,24 @@ class DetectionModelTrainer:
         :param iou_threshold:
         :param object_threshold:
         :param nms_threshold:
-        :return: list of dictionaries, containing one dict per evaluated model.
-            Each dict contains exactly the same metrics that are printed on standard output
+        :return:
         """
 
         self.__training_mode = False
+        detection_model_json = json.load(open(json_path))
 
-        with open(json_path, 'r') as json_file:
-            detection_model_json = json.load(json_file)
 
         temp_anchor_array = []
         new_anchor_array = []
 
-        temp_anchor_array.append(detection_model_json["anchors"][2])
-        temp_anchor_array.append(detection_model_json["anchors"][1])
-        temp_anchor_array.append(detection_model_json["anchors"][0])
-
-        for aa in temp_anchor_array:
+        for aa in detection_model_json["anchors"]:
             for aaa in aa:
-                new_anchor_array.append(aaa)
+                temp_anchor_array.append(aaa)
+
+        reverse_count = len(temp_anchor_array) - 1
+        while (reverse_count > -1):
+            new_anchor_array.append(temp_anchor_array[reverse_count])
+            reverse_count -= 1
 
         self.__model_anchors = new_anchor_array
         self.__model_labels = detection_model_json["labels"]
@@ -363,7 +334,7 @@ class DetectionModelTrainer:
 
         print("Starting Model evaluation....")
 
-        _, valid_ints, labels, max_box_per_image = self._create_training_instances(
+        train_ints, valid_ints, labels, max_box_per_image = self._create_training_instances(
             self.__train_annotations_folder,
             self.__train_images_folder,
             self.__train_cache_file,
@@ -373,12 +344,6 @@ class DetectionModelTrainer:
             self.__model_labels
 
         )
-
-        if len(valid_ints) == 0:
-            print('Validation samples were not provided.')
-            print('Please, check your validation samples are correctly provided:')
-            print('\tAnnotations: {}\n\tImages: {}'.format(self.__validation_annotations_folder,
-                                                           self.__validation_images_folder))
 
         valid_generator = BatchGenerator(
             instances=valid_ints,
@@ -394,25 +359,45 @@ class DetectionModelTrainer:
             norm=normalize
         )
 
-        results = list()
+        train_generator = BatchGenerator(
+            instances=train_ints,
+            anchors=self.__model_anchors,
+            labels=labels,
+            downsample=32,  # ratio between network input's size and network output's size, 32 for YOLOv3
+            max_box_per_image=max_box_per_image,
+            batch_size=self.__train_batch_size,
+            min_net_size=self.__model_min_input_size,
+            max_net_size=self.__model_max_input_size,
+            shuffle=True,
+            jitter=0.3,
+            norm=normalize
+        )
 
-        if os.path.isfile(model_path):
-            # model_files must be a list containing the complete path to the files,
-            # if a file is given, then the list contains just this file
-            model_files = [model_path]
-        elif os.path.isdir(model_path):
-            # model_files must be a list containing the complete path to the files,
-            # if a folder is given, then the list contains the complete path to each file on that folder
-            model_files = sorted([os.path.join(model_path, file_name) for file_name in os.listdir(model_path)])
-            # sort the files to make sure we're always evaluating them on same order
-        else:
-            print('model_path must be the path to a .h5 file or a directory. Found {}'.format(model_path))
-            return results
+        multi_gpu = len(self.__train_gpus.split(','))
+        warmup_batches = self.__train_warmup_epochs * (self.__train_times * len(train_generator))
 
-        for model_file in model_files:
-            if str(model_file).endswith(".h5"):
+        train_model, infer_model = self._create_model(
+            nb_class=len(labels),
+            anchors=self.__model_anchors,
+            max_box_per_image=max_box_per_image,
+            max_grid=[self.__model_max_input_size, self.__model_max_input_size],
+            batch_size=self.__train_batch_size,
+            warmup_batches=warmup_batches,
+            ignore_thresh=self.__train_ignore_treshold,
+            multi_gpu=multi_gpu,
+            lr=self.__train_learning_rate,
+            grid_scales=self.__train_grid_scales,
+            obj_scale=self.__train_obj_scale,
+            noobj_scale=self.__train_noobj_scale,
+            xywh_scale=self.__train_xywh_scale,
+            class_scale=self.__train_class_scale,
+        )
+
+
+        if(os.path.isfile(model_path)):
+            if(str(model_path).endswith(".h5")):
                 try:
-                    infer_model = load_model(model_file)
+                    infer_model = load_model(model_path)
 
                     ###############################
                     #   Run the evaluation
@@ -421,37 +406,49 @@ class DetectionModelTrainer:
                     average_precisions = evaluate(infer_model, valid_generator, iou_threshold=iou_threshold,
                                                   obj_thresh=object_threshold, nms_thresh=nms_threshold)
 
-                    result_dict = {
-                        'model_file': model_file,
-                        'using_iou': iou_threshold,
-                        'using_object_threshold': object_threshold,
-                        'using_non_maximum_suppression': nms_threshold,
-                        'average_precision': dict(),
-                        'evaluation_samples': len(valid_ints)
-                    }
                     # print the score
-                    print("Model File: ", model_file, '\n')
-                    print("Evaluation samples: ", len(valid_ints))
-                    print("Using IoU: ", iou_threshold)
-                    print("Using Object Threshold: ", object_threshold)
-                    print("Using Non-Maximum Suppression: ", nms_threshold)
-
+                    print("Model File: ", model_path, '\n')
+                    print("Using IoU : ", iou_threshold)
+                    print("Using Object Threshold : ", object_threshold)
+                    print("Using Non-Maximum Suppression : ", nms_threshold)
                     for label, average_precision in average_precisions.items():
                         print(labels[label] + ': {:.4f}'.format(average_precision))
-                        result_dict['average_precision'][labels[label]] = average_precision
-
                     print('mAP: {:.4f}'.format(sum(average_precisions.values()) / len(average_precisions)))
-                    result_dict['map'] = sum(average_precisions.values()) / len(average_precisions)
                     print("===============================")
+                except:
+                    None
 
-                    results.append(result_dict)
-                except Exception as e:
-                    print('skipping the evaluation of {} because following exception occurred: {}'.format(model_file, e))
-                    continue
-            else:
-                print('skipping the evaluation of {} since it\'s not a .h5 file'.format(model_file))
+        elif(os.path.isdir(model_path)):
+            model_files = os.listdir(model_path)
 
-        return results
+            for model_file in model_files:
+                if(str(model_file).endswith(".h5")):
+                    try:
+                        infer_model = load_model(os.path.join(model_path, model_file))
+
+                        ###############################
+                        #   Run the evaluation
+                        ###############################
+                        # compute mAP for all the classes
+                        average_precisions = evaluate(infer_model, valid_generator, iou_threshold=iou_threshold,
+                                                      obj_thresh=object_threshold, nms_thresh=nms_threshold)
+
+                        # print the score
+                        print("Model File: ", os.path.join(model_path, model_file), '\n')
+                        print("Using IoU : ", iou_threshold)
+                        print("Using Object Threshold : ", object_threshold)
+                        print("Using Non-Maximum Suppression : ", nms_threshold)
+                        for label, average_precision in average_precisions.items():
+                            print(labels[label] + ': {:.4f}'.format(average_precision))
+                        print('mAP: {:.4f}'.format(sum(average_precisions.values()) / len(average_precisions)))
+                        print("===============================")
+                    except:
+                        continue
+
+
+
+
+
 
     def _create_training_instances(self,
             train_annot_folder,
@@ -470,23 +467,15 @@ class DetectionModelTrainer:
 
         if os.path.exists(valid_annot_folder):
             valid_ints, valid_labels = parse_voc_annotation(valid_annot_folder, valid_image_folder, valid_cache, labels)
-            print('Evaluating over {} samples taken from {}'.format(len(valid_ints),
-                                                                    os.path.dirname(valid_annot_folder)))
         else:
 
-            train_portion = 0.8  # use 80% to train and the remaining 20% to evaluate
-            train_valid_split = int(round(train_portion * len(train_ints)))
+            train_valid_split = int(0.8 * len(train_ints))
             np.random.seed(0)
             np.random.shuffle(train_ints)
+            np.random.seed()
 
             valid_ints = train_ints[train_valid_split:]
             train_ints = train_ints[:train_valid_split]
-            print('Evaluating over {} samples taken as {:5.2f}% of the training set '
-                  'given at {}'.format(len(valid_ints),
-                                       (1 - train_portion)*100,
-                                       os.path.dirname(train_annot_folder)))
-
-        print('Training over {} samples  given at {}'.format(len(train_ints), os.path.dirname(train_annot_folder)))
 
         # compare the seen labels with the given labels in config.json
         if len(labels) > 0:
@@ -494,11 +483,11 @@ class DetectionModelTrainer:
 
             # return None, None, None if some given label is not in the dataset
             if len(overlap_labels) < len(labels):
-                if self.__training_mode:
+                if(self.__training_mode):
                     print('Some labels have no annotations! Please revise the list of labels in your configuration.')
                 return None, None, None, None
         else:
-            if self.__training_mode:
+            if(self.__training_mode):
                 print('No labels are provided. Train on all seen labels.')
                 print(train_labels)
 
@@ -512,7 +501,7 @@ class DetectionModelTrainer:
 
         checkpoint = CustomModelCheckpoint(
             model_to_save=model_to_save,
-            filepath=saved_weights_name + 'ex-{epoch:03d}--loss-{loss:08.3f}.h5',
+            filepath=saved_weights_name + 'ex-{epoch:02d}--loss-{loss:.2f}.h5',
             monitor='loss',
             verbose=0,
             save_best_only=True,
@@ -529,10 +518,8 @@ class DetectionModelTrainer:
             cooldown=0,
             min_lr=0
         )
-        tensor_board = TensorBoard(
-            log_dir=self.__logs_directory
-        )
-        return [checkpoint, reduce_on_plateau, tensor_board]
+
+        return [checkpoint, reduce_on_plateau]
 
     def _create_model(
             self,
@@ -550,14 +537,14 @@ class DetectionModelTrainer:
             xywh_scale,
             class_scale
     ):
-        if len(multi_gpu) > 1:
+        if multi_gpu > 1:
             with tf.device('/cpu:0'):
-                template_model, infer_model = yolov3_train(
-                    num_classes=nb_class,
+                template_model, infer_model = create_yolov3_model(
+                    nb_class=nb_class,
                     anchors=anchors,
                     max_box_per_image=max_box_per_image,
                     max_grid=max_grid,
-                    batch_size=batch_size // len(multi_gpu),
+                    batch_size=batch_size // multi_gpu,
                     warmup_batches=warmup_batches,
                     ignore_thresh=ignore_thresh,
                     grid_scales=grid_scales,
@@ -567,8 +554,8 @@ class DetectionModelTrainer:
                     class_scale=class_scale
                 )
         else:
-            template_model, infer_model = yolov3_train(
-                num_classes=nb_class,
+            template_model, infer_model = create_yolov3_model(
+                nb_class=nb_class,
                 anchors=anchors,
                 max_box_per_image=max_box_per_image,
                 max_grid=max_grid,
@@ -583,17 +570,18 @@ class DetectionModelTrainer:
             )
 
             # load the pretrained weight if exists, otherwise load the backend weight only
-
-        if len(self.__pre_trained_model) > 3:
-            if self.__training_mode:
+        if(len(self.__pre_trained_model) > 3):
+            if(self.__training_mode):
                 print("Training with transfer learning from pretrained Model")
             template_model.load_weights(self.__pre_trained_model, by_name=True)
         else:
-            if self.__training_mode:
+            if(self.__training_mode):
                 print("Pre-trained Model not provided. Transfer learning not in use.")
                 print("Training will start with 3 warmup experiments")
 
-        if len(multi_gpu) > 1:
+
+
+        if multi_gpu > 1:
             train_model = multi_gpu_model(template_model, gpus=multi_gpu)
         else:
             train_model = template_model
@@ -602,6 +590,10 @@ class DetectionModelTrainer:
         train_model.compile(loss=dummy_loss, optimizer=optimizer)
 
         return train_model, infer_model
+
+
+
+
 
 
 class CustomObjectDetection:
@@ -616,10 +608,11 @@ class CustomObjectDetection:
         self.__model_labels = []
         self.__model_anchors = []
         self.__detection_config_json_path = ""
+        self.__model_loaded = False
         self.__input_size = 416
         self.__object_threshold = 0.4
         self.__nms_threshold = 0.4
-        self.__model = None
+        self.__model_collection = []
         self.__detection_utils = CustomDetectionUtils(labels=[])
 
     def setModelTypeAsYOLOv3(self):
@@ -632,17 +625,16 @@ class CustomObjectDetection:
     def setModelPath(self, detection_model_path):
         """
         'setModelPath' is used to specify the filepath to your custom detection model
-        :param detection_model_path: path to the .h5 model file.
-            Usually is one of those under <data_directory>/models/detection_model-ex-ddd--loss-dddd.ddd.h5
-        :return: None
+        :param detection_model_path:
+        :return:
         """
         self.__model_path = detection_model_path
 
     def setJsonPath(self, configuration_json):
         """
         'setJsonPath' is used to set the filepath to the configuration JSON file for your custom detection model
-        :param configuration_json: path to the .json file. Usually it is <data_directory>/json/detection_config.json
-        :return: None
+        :param configuration_json:
+        :return:
         """
         self.__detection_config_json_path = configuration_json
 
@@ -650,29 +642,39 @@ class CustomObjectDetection:
 
         """
         'loadModel' is used to load the model into the CustomObjectDetection class
-        :return: None
+        :return:
         """
 
-        if self.__model_type == "yolov3":
-            detection_model_json = json.load(open(self.__detection_config_json_path))
+        if (self.__model_loaded == False):
+            if(self.__model_type == "yolov3"):
+                detection_model_json = json.load(open(self.__detection_config_json_path))
 
-            self.__model_labels = detection_model_json["labels"]
-            self.__model_anchors = detection_model_json["anchors"]
+                self.__model_labels = detection_model_json["labels"]
+                self.__model_anchors = detection_model_json["anchors"]
 
-            self.__detection_utils = CustomDetectionUtils(labels=self.__model_labels)
+                self.__detection_utils = CustomDetectionUtils(labels=self.__model_labels)
 
-            self.__model = yolov3_main(Input(shape=(None, None, 3)), 3, len(self.__model_labels))
+                model = yolo_main(Input(shape=(None, None, 3)), 3,
+                                  len(self.__model_labels))
 
-            self.__model.load_weights(self.__model_path)
+                model.load_weights(self.__model_path)
+                self.__model_collection.append(model)
+                self.__model_loaded = True
+
+
+
+
+
+
 
     def detectObjectsFromImage(self, input_image="", output_image_path="", input_type="file", output_type="file",
-                               extract_detected_objects=False, minimum_percentage_probability=50, nms_treshold=0.4,
-                               display_percentage_probability=True, display_object_name=True, thread_safe=False):
+                               extract_detected_objects=False, minimum_percentage_probability=30, nms_treshold=0.4,
+                               display_percentage_probability=True, display_object_name=True):
 
         """
 
         'detectObjectsFromImage()' function is used to detect objects observable in the given image:
-                    * input_image , which can be a filepath or image numpy array in BGR
+                    * input_image , which can be a filepath or image numpy array
                     * output_image_path (only if output_type = file) , file path to the output image that will contain the detection boxes and label, if output_type="file"
                     * input_type (optional) , filepath/numpy array of the image. Acceptable values are "file" and "array"
                     * output_type (optional) , file path/numpy array/image file stream of the image. Acceptable values are "file" and "array"
@@ -681,7 +683,6 @@ class CustomObjectDetection:
                     * nms_threshold (optional, o.45 by default) , option to set the Non-maximum suppression for the detection
                     * display_percentage_probability (optional, True by default), option to show or hide the percentage probability of each object in the saved/returned detected image
                     * display_display_object_name (optional, True by default), option to show or hide the name of each object in the saved/returned detected image
-                    * thread_safe (optional, False by default), enforce the loaded detection model works across all threads if set to true, made possible by forcing all Keras inference to run on the default graph
 
 
             The values returned by this function depends on the parameters parsed. The possible values returnable
@@ -693,7 +694,7 @@ class CustomObjectDetection:
                     detected in the image. Each dictionary contains the following property:
                     * name (string)
                     * percentage_probability (float)
-                    * box_points (list of x1,y1,x2 and y2 coordinates)
+                    * box_points (tuple of x1,y1,x2 and y2 coordinates)
 
             - If extract_detected_objects = False or at its default value and output_type = 'array' ,
               Then the function will return:
@@ -703,7 +704,7 @@ class CustomObjectDetection:
                     detected in the image. Each dictionary contains the following property:
                     * name (string)
                     * percentage_probability (float)
-                    * box_points (list of x1,y1,x2 and y2 coordinates)
+                    * box_points (tuple of x1,y1,x2 and y2 coordinates)
 
             - If extract_detected_objects = True and output_type = 'file' or
                 at its default value, you must parse in the 'output_image_path' as a string to the path you want
@@ -712,7 +713,7 @@ class CustomObjectDetection:
                     detected in the image. Each dictionary contains the following property:
                     * name (string)
                     * percentage_probability (float)
-                    * box_points (list of x1,y1,x2 and y2 coordinates)
+                    * box_points (tuple of x1,y1,x2 and y2 coordinates)
                 2. an array of string paths to the image of each object extracted from the image
 
             - If extract_detected_objects = True and output_type = 'array', the the function will return:
@@ -721,7 +722,7 @@ class CustomObjectDetection:
                     detected in the image. Each dictionary contains the following property:
                     * name (string)
                     * percentage_probability (float)
-                    * box_points (list of x1,y1,x2 and y2 coordinates)
+                    * box_points (tuple of x1,y1,x2 and y2 coordinates)
                 3. an array of numpy arrays of each object detected in the image
 
         :param input_image:
@@ -733,71 +734,54 @@ class CustomObjectDetection:
         :param nms_treshold:
         :param display_percentage_probability:
         :param display_object_name:
-        :param thread_safe:
         :return image_frame:
         :return output_objects_array:
         :return detected_objects_image_array:
         """
 
-        if self.__model is None:
+        if (self.__model_loaded == False):
             raise ValueError("You must call the loadModel() function before making object detection.")
         else:
-            if output_type == "file":
-                # from the image file, lets keep the directory and the filename, but remove its  format
-                # if output_image_path is path/to/the/output/image.png
-                # then output_image_folder is  path/to/the/output/image
-                # let's check if it is in the appropriated format soon to fail early
-                output_image_folder, n_subs = re.subn(r'\.(?:jpe?g|png|tif|webp|PPM|PGM)$', '', output_image_path, flags=re.I)
-                if n_subs == 0:
-                    # if no substitution was done, the given output_image_path is not in a supported format,
-                    # raise an error
-                    raise ValueError("output_image_path must be the path where to write the image. "
-                                     "Therefore it must end as one the following: "
-                                     "'.jpg', '.png', '.tif', '.webp', '.PPM', '.PGM'. {} found".format(output_image_path))
-                elif extract_detected_objects:
-                    # Results must be written as files and need to extract detected objects as images,
-                    # let's create a folder to store the object's images
-                    objects_dir = output_image_folder + "-objects"
-
-                    os.makedirs(objects_dir, exist_ok=True)
-
             self.__object_threshold = minimum_percentage_probability / 100
             self.__nms_threshold = nms_treshold
 
             output_objects_array = []
             detected_objects_image_array = []
 
-            if input_type == "file":
+            model = self.__model_collection[0]
+
+            image = []
+
+            if(input_type == "file"):
                 image = cv2.imread(input_image)
-            elif input_type == "array":
+            elif(input_type == "array"):
                 image = input_image
-            else:
-                raise ValueError("input_type must be 'file' or 'array'. {} found".format(input_type))
+
 
             image_frame = image.copy()
-
+            image_frame2 = image.copy()
             height, width, channels = image.shape
 
             image = cv2.resize(image, (self.__input_size, self.__input_size))
 
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image = Image.fromarray(image)
 
-            image = image.astype("float32") / 255.
+            # pre-process image
+            image = img_to_array(image)
+            image = image.astype("float32") / 255
 
             # expand the image to batch
             image = np.expand_dims(image, 0)
 
-            if self.__model_type == "yolov3":
-                if thread_safe == True:
-                    with K.get_session().graph.as_default():
-                        yolo_results = self.__model.predict(image)
-                else:
-                    yolo_results = self.__model.predict(image)
+            if(self.__model_type == "yolov3"):
+                yolo_result = model.predict(image)
 
                 boxes = list()
 
-                for idx, result in enumerate(yolo_results):
-                    box_set = self.__detection_utils.decode_netout(result[0], self.__model_anchors[idx],
+
+                for a in range(len(yolo_result)):
+                    box_set = self.__detection_utils.decode_netout(yolo_result[a][0], self.__model_anchors[a],
                                                                    self.__object_threshold, self.__input_size,
                                                                    self.__input_size)
                     boxes += box_set
@@ -810,52 +794,59 @@ class CustomObjectDetection:
                                                                                      self.__object_threshold)
 
                 for object_box, object_label, object_score in zip(all_boxes, all_labels, all_scores):
-                    each_object_details = dict()
+                    each_object_details = {}
                     each_object_details["name"] = object_label
                     each_object_details["percentage_probability"] = object_score
 
-                    if object_box.xmin < 0:
+                    if(object_box.xmin < 0):
                         object_box.xmin = 0
-                    if object_box.ymin < 0:
+                    if (object_box.ymin < 0):
                         object_box.ymin = 0
 
                     each_object_details["box_points"] = [object_box.xmin, object_box.ymin, object_box.xmax, object_box.ymax]
                     output_objects_array.append(each_object_details)
 
-                drawn_image = self.__detection_utils.draw_boxes_and_caption(image_frame.copy(), all_boxes, all_labels,
+                image_frame = self.__detection_utils.draw_boxes_and_caption(image_frame, all_boxes, all_labels,
                                                                             all_scores, show_names=display_object_name,
                                                                             show_percentage=display_percentage_probability)
 
-                if extract_detected_objects:
+                if (extract_detected_objects == True):
+                    counting = 0
 
-                    for cnt, each_object in enumerate(output_objects_array):
+                    objects_dir = output_image_path + "-objects"
+                    if (os.path.exists(objects_dir) == False):
+                        os.mkdir(objects_dir)
 
-                        splitted_image = image_frame[each_object["box_points"][1]:each_object["box_points"][3],
-                                                     each_object["box_points"][0]:each_object["box_points"][2]]
-                        if output_type == "file":
-                            splitted_image_path = os.path.join(objects_dir, "{}-{:05d}.jpg".format(each_object["name"],
-                                                                                                   cnt))
-
-                            cv2.imwrite(splitted_image_path, splitted_image)
+                    for each_object in output_objects_array:
+                        counting += 1
+                        splitted_copy = image_frame2.copy()[each_object["box_points"][1]:each_object["box_points"][3],
+                                        each_object["box_points"][0]:each_object["box_points"][2]]
+                        if (output_type == "file"):
+                            splitted_image_path = os.path.join(objects_dir,
+                                                               each_object["name"] + "-" + str(counting) + ".jpg")
+                            cv2.imwrite(splitted_image_path, splitted_copy)
                             detected_objects_image_array.append(splitted_image_path)
-                        elif output_type == "array":
-                            detected_objects_image_array.append(splitted_image.copy())
+                        elif (output_type == "array"):
+                            detected_objects_image_array.append(splitted_copy)
 
-                if output_type == "file":
-                    # we already validated that the output_image_path is a supported by OpenCV one
-                    cv2.imwrite(output_image_path, drawn_image)
+                if (output_type == "file"):
+                    cv2.imwrite(output_image_path, image_frame)
 
-                if extract_detected_objects:
-                    if output_type == "file":
+                if (extract_detected_objects == True):
+                    if (output_type == "file"):
                         return output_objects_array, detected_objects_image_array
-                    elif output_type == "array":
-                        return drawn_image, output_objects_array, detected_objects_image_array
+                    elif (output_type == "array"):
+                        return image_frame, output_objects_array, detected_objects_image_array
 
                 else:
-                    if output_type == "file":
+                    if (output_type == "file"):
                         return output_objects_array
-                    elif output_type == "array":
-                        return drawn_image, output_objects_array
+                    elif (output_type == "array"):
+                        return image_frame, output_objects_array
+
+
+
+
 
 
 class CustomVideoObjectDetection:
@@ -925,7 +916,6 @@ class CustomVideoObjectDetection:
                 detector.loadModel()
 
                 self.__detector = detector
-                self.__model_loaded = True
 
 
     def detectObjectsFromVideo(self, input_file_path="", camera_input=None, output_file_path="", frames_per_second=20,
@@ -1097,13 +1087,12 @@ class CustomVideoObjectDetection:
                     if (save_detected_video == True):
                         output_video.write(detected_frame)
 
-                    if (counting == 1 or check_frame_interval == 0):
-                        if (per_frame_function != None):
-                            if (return_detected_frame == True):
-                                per_frame_function(counting, output_objects_array, output_objects_count,
-                                                   detected_frame)
-                            elif (return_detected_frame == False):
-                                per_frame_function(counting, output_objects_array, output_objects_count)
+                    if (per_frame_function != None):
+                        if (return_detected_frame == True):
+                            per_frame_function(counting, output_objects_array, output_objects_count,
+                                               detected_frame)
+                        elif (return_detected_frame == False):
+                            per_frame_function(counting, output_objects_array, output_objects_count)
 
                     if (per_second_function != None):
                         if (counting != 1 and (counting % frames_per_second) == 0):
@@ -1126,7 +1115,8 @@ class CustomVideoObjectDetection:
                                         this_second_counting[eachItem] = eachCountingDict[eachItem]
 
                             for eachCountingItem in this_second_counting:
-                                this_second_counting[eachCountingItem] = int(this_second_counting[eachCountingItem] / frames_per_second)
+                                this_second_counting[eachCountingItem] = this_second_counting[
+                                                                             eachCountingItem] / frames_per_second
 
                             if (return_detected_frame == True):
                                 per_second_function(int(counting / frames_per_second),
@@ -1160,7 +1150,9 @@ class CustomVideoObjectDetection:
                                         this_minute_counting[eachItem] = eachCountingDict[eachItem]
 
                             for eachCountingItem in this_minute_counting:
-                                this_minute_counting[eachCountingItem] = int(this_minute_counting[eachCountingItem] / (frames_per_second * 60))
+                                this_minute_counting[eachCountingItem] = this_minute_counting[
+                                                                             eachCountingItem] / (
+                                                                                 frames_per_second * 60)
 
                             if (return_detected_frame == True):
                                 per_minute_function(int(counting / (frames_per_second * 60)),
@@ -1232,6 +1224,7 @@ class BoundBox:
         return self.score
 
 
+
 class CustomDetectionUtils:
     def __init__(self, labels):
         self.__labels = labels
@@ -1243,8 +1236,8 @@ class CustomDetectionUtils:
             red, green, blue = int(red), int(green), int(blue)
             self.__colors.append([red, green, blue])
 
-    @staticmethod
-    def _sigmoid(x):
+
+    def _sigmoid(self, x):
         return 1. / (1. + np.exp(-x))
 
     def decode_netout(self, netout, anchors, obj_thresh, net_h, net_w):
@@ -1258,30 +1251,26 @@ class CustomDetectionUtils:
         netout[..., 5:] = netout[..., 4][..., np.newaxis] * netout[..., 5:]
         netout[..., 5:] *= netout[..., 5:] > obj_thresh
 
-        for row in range(grid_h):
-            for col in range(grid_w):
-                for b in range(nb_box):
-                    # 4th element is objectness score
-                    objectness = netout[row, col, b, 4]
-
-                    if objectness <= obj_thresh:
-                        continue
-
-                    # first 4 elements are x, y, w, and h
-                    x, y, w, h = netout[row, col, b, :4]
-                    x = (col + x) / grid_w  # center position, unit: image width
-                    y = (row + y) / grid_h  # center position, unit: image height
-                    w = anchors[2 * b + 0] * np.exp(w) / net_w  # unit: image width
-                    h = anchors[2 * b + 1] * np.exp(h) / net_h  # unit: image height
-                    # last elements are class probabilities
-                    classes = netout[row, col, b, 5:]
-                    box = BoundBox(x - w / 2, y - h / 2, x + w / 2, y + h / 2, objectness, classes)
-                    boxes.append(box)
-
+        for i in range(grid_h * grid_w):
+            row = i / grid_w
+            col = i % grid_w
+            for b in range(nb_box):
+                # 4th element is objectness score
+                objectness = netout[int(row)][int(col)][b][4]
+                if (objectness.all() <= obj_thresh): continue
+                # first 4 elements are x, y, w, and h
+                x, y, w, h = netout[int(row)][int(col)][b][:4]
+                x = (col + x) / grid_w  # center position, unit: image width
+                y = (row + y) / grid_h  # center position, unit: image height
+                w = anchors[2 * b + 0] * np.exp(w) / net_w  # unit: image width
+                h = anchors[2 * b + 1] * np.exp(h) / net_h  # unit: image height
+                # last elements are class probabilities
+                classes = netout[int(row)][col][b][5:]
+                box = BoundBox(x - w / 2, y - h / 2, x + w / 2, y + h / 2, objectness, classes)
+                boxes.append(box)
         return boxes
 
-    @staticmethod
-    def correct_yolo_boxes(boxes, image_h, image_w, net_h, net_w):
+    def correct_yolo_boxes(self, boxes, image_h, image_w, net_h, net_w):
         new_w, new_h = net_w, net_h
         for i in range(len(boxes)):
             x_offset, x_scale = (net_w - new_w) / 2. / net_w, float(new_w) / net_w
@@ -1324,18 +1313,13 @@ class CustomDetectionUtils:
             nb_class = len(boxes[0].classes)
         else:
             return
-
         for c in range(nb_class):
             sorted_indices = np.argsort([-box.classes[c] for box in boxes])
-
             for i in range(len(sorted_indices)):
                 index_i = sorted_indices[i]
-
                 if boxes[index_i].classes[c] == 0: continue
-
                 for j in range(i + 1, len(sorted_indices)):
                     index_j = sorted_indices[j]
-
                     if self.bbox_iou(boxes[index_i], boxes[index_j]) >= nms_thresh:
                         boxes[index_j].classes[c] = 0
 
@@ -1367,9 +1351,10 @@ class CustomDetectionUtils:
         if label < len(self.__colors):
             return self.__colors[label]
         else:
-            return 0, 255, 0
+            return (0, 255, 0)
 
     def draw_boxes_and_caption(self, image_frame, v_boxes, v_labels, v_scores, show_names=False, show_percentage=False):
+
 
         for i in range(len(v_boxes)):
             box = v_boxes[i]
@@ -1380,16 +1365,23 @@ class CustomDetectionUtils:
             image_frame = cv2.rectangle(image_frame, (x1, y1), (x2, y2), class_color, 2)
 
             label = ""
-            if show_names and show_percentage:
+            if(show_names == True and show_percentage == True):
                 label = "%s : %.3f" % (v_labels[i], v_scores[i])
-            elif show_names:
+            elif(show_names == True):
                 label = "%s" % (v_labels[i])
-            elif show_percentage:
+            elif (show_percentage == True):
                 label = "%.3f" % (v_scores[i])
 
-            if show_names or show_percentage:
+
+            if(show_names == True or show_percentage == True):
                 b = np.array([x1, y1, x2, y2]).astype(int)
                 cv2.putText(image_frame, label, (b[0], b[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (200, 0, 0), 3)
                 cv2.putText(image_frame, label, (b[0], b[1] - 10), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 2)
 
         return image_frame
+
+
+
+
+
+

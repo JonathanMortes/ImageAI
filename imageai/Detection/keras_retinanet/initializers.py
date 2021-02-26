@@ -14,13 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from tensorflow import keras
+import keras
 
+import numpy as np
 import math
 
 
 class PriorProbability(keras.initializers.Initializer):
-    """ Apply a prior probability to the weights.
+    """
+    Initializer applies a prior probability.
     """
 
     def __init__(self, probability=0.01):
@@ -32,7 +34,7 @@ class PriorProbability(keras.initializers.Initializer):
         }
 
     def __call__(self, shape, dtype=None):
-        # set bias to -log((1 - p)/p) for foreground
-        result = keras.backend.ones(shape, dtype=dtype) * -math.log((1 - self.probability) / self.probability)
+        # set bias to -log((1 - p)/p) for foregound
+        result = np.ones(shape, dtype=dtype) * -math.log((1 - self.probability) / self.probability)
 
         return result

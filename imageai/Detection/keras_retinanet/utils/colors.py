@@ -18,7 +18,6 @@ def label_color(label):
         warnings.warn('Label {} has no color, returning default.'.format(label))
         return (0, 255, 0)
 
-
 """
 Generated using:
 

@@ -1,0 +1,18 @@
+Metadata-Version: 2.1
+Name: imageai
+Version: 2.1.0
+Summary: A python library built to empower developers to build applications and systems  with self-contained Computer Vision capabilities
+Home-page: https://github.com/OlafenwaMoses/ImageAI
+Author: Moses Olafenwa and John Olafenwa
+Author-email: guymodscientist@gmail.com
+License: MIT
+Platform: UNKNOWN
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: pillow
+Requires-Dist: matplotlib
+Requires-Dist: h5py
+
+UNKNOWN
+
+

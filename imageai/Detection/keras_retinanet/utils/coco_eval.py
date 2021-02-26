@@ -14,57 +14,49 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from __future__ import print_function
+
+from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
-from tensorflow import keras
 import numpy as np
 import json
-
-import progressbar
-assert(callable(progressbar.progressbar)), "Using wrong progressbar module, install 'progressbar2' instead."
+import os
 
 
 def evaluate_coco(generator, model, threshold=0.05):
-    """ Use the pycocotools to evaluate a COCO model on a dataset.
-
-    Args
-        generator : The generator for generating the evaluation data.
-        model     : The model to evaluate.
-        threshold : The score threshold to use.
-    """
     # start collecting results
     results = []
     image_ids = []
-    for index in progressbar.progressbar(range(generator.size()), prefix='COCO evaluation: '):
+    for index in range(generator.size()):
         image = generator.load_image(index)
         image = generator.preprocess_image(image)
         image, scale = generator.resize_image(image)
 
-        if keras.backend.image_data_format() == 'channels_first':
-            image = image.transpose((2, 0, 1))
-
         # run network
-        boxes, scores, labels = model.predict_on_batch(np.expand_dims(image, axis=0))
+        _, _, detections = model.predict_on_batch(np.expand_dims(image, axis=0))
+
+        # clip to image shape
+        detections[:, :, 0] = np.maximum(0, detections[:, :, 0])
+        detections[:, :, 1] = np.maximum(0, detections[:, :, 1])
+        detections[:, :, 2] = np.minimum(image.shape[1], detections[:, :, 2])
+        detections[:, :, 3] = np.minimum(image.shape[0], detections[:, :, 3])
 
         # correct boxes for image scale
-        boxes /= scale
+        detections[0, :, :4] /= scale
 
         # change to (x, y, w, h) (MS COCO standard)
-        boxes[:, :, 2] -= boxes[:, :, 0]
-        boxes[:, :, 3] -= boxes[:, :, 1]
+        detections[:, :, 2] -= detections[:, :, 0]
+        detections[:, :, 3] -= detections[:, :, 1]
 
         # compute predicted labels and scores
-        for box, score, label in zip(boxes[0], scores[0], labels[0]):
-            # scores are sorted, so we can break
-            if score < threshold:
-                break
-
-            # append detection for each positively labeled class
+        for i, j in np.transpose(np.where(detections[0, :, 4:] > threshold)):
+            # append detections for each positively labeled class
             image_result = {
                 'image_id'    : generator.image_ids[index],
-                'category_id' : generator.label_to_coco_label(label),
-                'score'       : float(score),
-                'bbox'        : box.tolist(),
+                'category_id' : generator.label_to_coco_label(j),
+                'score'       : float(detections[0, i, 4 + j]),
+                'bbox'        : (detections[0, i, :4]).tolist(),
             }
 
             # append detection to results
@@ -72,6 +64,9 @@ def evaluate_coco(generator, model, threshold=0.05):
 
         # append image to list of processed images
         image_ids.append(generator.image_ids[index])
+
+        # print progress
+        print('{}/{}'.format(index, generator.size()), end='\r')
 
     if not len(results):
         return
@@ -90,4 +85,3 @@ def evaluate_coco(generator, model, threshold=0.05):
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
-    return coco_eval.stats

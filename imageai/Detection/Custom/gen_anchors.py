@@ -1,8 +1,9 @@
 import random
+import argparse
 import numpy as np
 
 from imageai.Detection.Custom.voc import parse_voc_annotation
-
+import json
 
 def IOU(ann, centroids):
     w, h = ann
@@ -22,7 +23,6 @@ def IOU(ann, centroids):
         similarities.append(similarity) # will become (k,) shape
 
     return np.array(similarities)
-
 
 def avg_IOU(anns, centroids):
     n,d = anns.shape
@@ -69,7 +69,6 @@ def run_kmeans(ann_dims, anchor_num):
         prev_assignments = assignments.copy()
         old_distances = distances.copy()
 
-
 def generateAnchors(train_annotation_folder, train_image_folder, train_cache_file, model_labels):
 
     print("Generating anchor boxes for training images and annotation...")
@@ -88,8 +87,8 @@ def generateAnchors(train_annotation_folder, train_image_folder, train_cache_fil
 
         for obj in image['object']:
             relative_w = (float(obj['xmax']) - float(obj['xmin']))/image['width']
-            relative_h = (float(obj["ymax"]) - float(obj['ymin']))/image['height']
-            annotation_dims.append(tuple(map(float, (relative_w,relative_h))))
+            relatice_h = (float(obj["ymax"]) - float(obj['ymin']))/image['height']
+            annotation_dims.append(tuple(map(float, (relative_w,relatice_h))))
 
     annotation_dims = np.array(annotation_dims)
     centroids = run_kmeans(annotation_dims, num_anchors)
@@ -102,6 +101,7 @@ def generateAnchors(train_annotation_folder, train_image_folder, train_cache_fil
     widths = anchors[:, 0]
     sorted_indices = np.argsort(widths)
 
+
     anchor_array = []
     reverse_anchor_array = []
     out_string = ""
@@ -112,9 +112,11 @@ def generateAnchors(train_annotation_folder, train_image_folder, train_cache_fil
 
         out_string += str(int(anchors[i, 0] * 416)) + ',' + str(int(anchors[i, 1] * 416)) + ', '
 
-    reverse_anchor_array.append(anchor_array[12:18])
-    reverse_anchor_array.append(anchor_array[6:12])
-    reverse_anchor_array.append(anchor_array[0:6])
+
+    reverse_count = len(anchor_array) -1
+    while(reverse_count > -1):
+        reverse_anchor_array.append(anchor_array[reverse_count])
+        reverse_count -= 1
 
     print("Anchor Boxes generated.")
     return anchor_array, reverse_anchor_array

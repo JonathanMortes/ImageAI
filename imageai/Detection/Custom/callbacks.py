@@ -1,4 +1,4 @@
-from tensorflow.keras.callbacks import TensorBoard, ModelCheckpoint
+from keras.callbacks import TensorBoard, ModelCheckpoint
 import tensorflow as tf
 import numpy as np
 import warnings

@@ -37,23 +37,12 @@ kitti_classes = {
 
 
 class KittiGenerator(Generator):
-    """ Generate data for a KITTI dataset.
-
-    See http://www.cvlibs.net/datasets/kitti/ for more information.
-    """
-
     def __init__(
         self,
         base_dir,
         subset='train',
         **kwargs
     ):
-        """ Initialize a KITTI data generator.
-
-        Args
-            base_dir: Directory w.r.t. where the files are to be searched (defaults to the directory containing the csv_data_file).
-            subset: The subset to generate data for (defaults to 'train').
-        """
         self.base_dir = base_dir
 
         label_dir = os.path.join(self.base_dir, subset, 'labels')
@@ -76,10 +65,9 @@ class KittiGenerator(Generator):
         1    rotation_y   Rotation ry around Y-axis in camera coordinates [-pi..pi]
         """
 
-        self.labels = {}
-        self.classes = kitti_classes
-        for name, label in self.classes.items():
-            self.labels[label] = name
+        self.id_to_labels = {}
+        for label, id in kitti_classes.items():
+            self.id_to_labels[id] = label
 
         self.image_data = dict()
         self.images = []
@@ -106,63 +94,33 @@ class KittiGenerator(Generator):
         super(KittiGenerator, self).__init__(**kwargs)
 
     def size(self):
-        """ Size of the dataset.
-        """
         return len(self.images)
 
     def num_classes(self):
-        """ Number of classes in the dataset.
-        """
-        return max(self.classes.values()) + 1
-
-    def has_label(self, label):
-        """ Return True if label is a known label.
-        """
-        return label in self.labels
-
-    def has_name(self, name):
-        """ Returns True if name is a known class.
-        """
-        return name in self.classes
+        return max(kitti_classes.values()) + 1
 
     def name_to_label(self, name):
-        """ Map name to label.
-        """
         raise NotImplementedError()
 
     def label_to_name(self, label):
-        """ Map label to name.
-        """
-        return self.labels[label]
+        return self.id_to_labels[label]
 
     def image_aspect_ratio(self, image_index):
-        """ Compute the aspect ratio for an image with image_index.
-        """
         # PIL is fast for metadata
         image = Image.open(self.images[image_index])
         return float(image.width) / float(image.height)
 
-    def image_path(self, image_index):
-        """ Get the path to an image.
-        """
-        return self.images[image_index]
-
     def load_image(self, image_index):
-        """ Load an image at the image_index.
-        """
-        return read_image_bgr(self.image_path(image_index))
+        return read_image_bgr(self.images[image_index])
 
     def load_annotations(self, image_index):
-        """ Load annotations for an image_index.
-        """
-        image_data = self.image_data[image_index]
-        annotations = {'labels': np.empty((len(image_data),)), 'bboxes': np.empty((len(image_data), 4))}
+        annotations = self.image_data[image_index]
 
-        for idx, ann in enumerate(image_data):
-            annotations['bboxes'][idx, 0] = float(ann['x1'])
-            annotations['bboxes'][idx, 1] = float(ann['y1'])
-            annotations['bboxes'][idx, 2] = float(ann['x2'])
-            annotations['bboxes'][idx, 3] = float(ann['y2'])
-            annotations['labels'][idx] = int(ann['cls_id'])
-
-        return annotations
+        boxes = np.zeros((len(annotations), 5))
+        for idx, ann in enumerate(annotations):
+            boxes[idx, 0] = float(ann['x1'])
+            boxes[idx, 1] = float(ann['y1'])
+            boxes[idx, 2] = float(ann['x2'])
+            boxes[idx, 3] = float(ann['y2'])
+            boxes[idx, 4] = int(ann['cls_id'])
+        return boxes

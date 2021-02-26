@@ -4,10 +4,8 @@ import os
 from .bbox import BoundBox, bbox_iou
 from scipy.special import expit
 
-
 def _sigmoid(x):
     return expit(x)
-
 
 def makedirs(path):
     try:
@@ -16,8 +14,7 @@ def makedirs(path):
         if not os.path.isdir(path):
             raise
 
-
-def evaluate(model,
+def evaluate(model, 
              generator, 
              iou_threshold,
              obj_thresh,
@@ -132,7 +129,6 @@ def evaluate(model,
 
     return average_precisions    
 
-
 def correct_yolo_boxes(boxes, image_h, image_w, net_h, net_w):
     if (float(net_w)/image_w) < (float(net_h)/image_h):
         new_w = net_w
@@ -150,7 +146,6 @@ def correct_yolo_boxes(boxes, image_h, image_w, net_h, net_w):
         boxes[i].ymin = int((boxes[i].ymin - y_offset) / y_scale * image_h)
         boxes[i].ymax = int((boxes[i].ymax - y_offset) / y_scale * image_h)
         
-
 def do_nms(boxes, nms_thresh):
     if len(boxes) > 0:
         nb_class = len(boxes[0].classes)
@@ -170,7 +165,6 @@ def do_nms(boxes, nms_thresh):
 
                 if bbox_iou(boxes[index_i], boxes[index_j]) >= nms_thresh:
                     boxes[index_j].classes[c] = 0
-
 
 def decode_netout(netout, anchors, obj_thresh, net_h, net_w):
     grid_h, grid_w = netout.shape[:2]
@@ -193,26 +187,24 @@ def decode_netout(netout, anchors, obj_thresh, net_h, net_w):
             # 4th element is objectness score
             objectness = netout[row, col, b, 4]
             
-            if objectness <= obj_thresh:
-                continue
+            if(objectness <= obj_thresh): continue
             
             # first 4 elements are x, y, w, and h
-            x, y, w, h = netout[row, col, b, :4]
+            x, y, w, h = netout[row,col,b,:4]
 
-            x = (col + x) / grid_w  # center position, unit: image width
-            y = (row + y) / grid_h  # center position, unit: image height
-            w = anchors[2 * b + 0] * np.exp(w) / net_w  # unit: image width
-            h = anchors[2 * b + 1] * np.exp(h) / net_h  # unit: image height
+            x = (col + x) / grid_w # center position, unit: image width
+            y = (row + y) / grid_h # center position, unit: image height
+            w = anchors[2 * b + 0] * np.exp(w) / net_w # unit: image width
+            h = anchors[2 * b + 1] * np.exp(h) / net_h # unit: image height  
             
             # last elements are class probabilities
-            classes = netout[row, col, b, 5:]
+            classes = netout[row,col,b,5:]
             
             box = BoundBox(x-w/2, y-h/2, x+w/2, y+h/2, objectness, classes)
 
             boxes.append(box)
 
     return boxes
-
 
 def preprocess_input(image, net_h, net_w):
     new_h, new_w, _ = image.shape
@@ -226,7 +218,7 @@ def preprocess_input(image, net_h, net_w):
         new_h = net_h
 
     # resize the image to the new size
-    resized = cv2.resize(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)/255., (new_w, new_h))
+    resized = cv2.resize(image[:,:,::-1]/255., (new_w, new_h))
 
     # embed the image into the standard letter box
     new_image = np.ones((net_h, net_w, 3)) * 0.5
@@ -235,11 +227,9 @@ def preprocess_input(image, net_h, net_w):
 
     return new_image
 
-
 def normalize(image):
     return image/255.
-
-
+       
 def get_yolo_boxes(model, images, net_h, net_w, anchors, obj_thresh, nms_thresh):
     image_h, image_w, _ = images[0].shape
     nb_images           = len(images)
@@ -272,7 +262,6 @@ def get_yolo_boxes(model, images, net_h, net_w, anchors, obj_thresh, nms_thresh)
 
     return batch_boxes        
 
-
 def compute_overlap(a, b):
     """
     Code originally from https://github.com/rbgirshick/py-faster-rcnn.
@@ -299,8 +288,7 @@ def compute_overlap(a, b):
     intersection = iw * ih
 
     return intersection / ua  
-
-
+    
 def compute_ap(recall, precision):
     """ Compute the average precision, given the recall and precision curves.
     Code originally from https://github.com/rbgirshick/py-faster-rcnn.
@@ -327,7 +315,6 @@ def compute_ap(recall, precision):
     # and sum (\Delta recall) * prec
     ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
     return ap     
-
 
 def _softmax(x, axis=-1):
     x = x - np.amax(x, axis, keepdims=True)
