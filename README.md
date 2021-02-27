@@ -1,5 +1,5 @@
 # ImageAI
-A google colab based Face and person recognition application based on multiple DNNs
+A google colab Face and person recognition application on video using  YoloV3 and Dlib
 
 
 
